@@ -1,0 +1,2 @@
+# app.chat.entity package
+

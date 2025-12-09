@@ -1,0 +1,70 @@
+name: CI/CD — Build → ECR → ECS
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: 108581769143.dkr.ecr.us-east-1.amazonaws.com
+  ECR_REPOSITORY: neogenx-fastapi
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-region: ${{ env.AWS_REGION }} 
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+            ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
+
+      - name: Prepare updated task definition JSON (replace image)
+        # requires jq installed on runner (available on ubuntu-latest)
+        run: |
+          IMAGE_URI=${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+          echo "Using image: $IMAGE_URI"
+          jq --arg IMAGE "$IMAGE_URI" '.containerDefinitions[0].image=$IMAGE' ./ecs/task-definition.json > ./ecs/task-def-for-register.json
+          cat ./ecs/task-def-for-register.json
+
+      - name: Register new ECS task definition
+        id: register
+        run: |
+          RESPONSE=$(aws ecs register-task-definition --cli-input-json file://./ecs/task-def-for-register.json)
+          echo "$RESPONSE" > register-output.json
+          ARN=$(jq -r '.taskDefinition.taskDefinitionArn' register-output.json)
+          echo "taskdef_arn=$ARN" >> $GITHUB_OUTPUT
+        env:
+          AWS_REGION: ${{ env.AWS_REGION }}
+
+      - name: Update ECS service to force new deployment
+        run: |
+          TASKDEF_ARN="${{ steps.register.outputs.taskdef_arn }}"
+          echo "Updating service ${{ secrets.ECS_SERVICE }} on cluster ${{ secrets.ECS_CLUSTER }} to $TASKDEF_ARN"
+          aws ecs update-service --cluster "${{ secrets.ECS_CLUSTER }}" --service "${{ secrets.ECS_SERVICE }}" --force-new-deployment --task-definition "$TASKDEF_ARN"
+        env:
+          AWS_REGION: ${{ env.AWS_REGION }}
+
+      - name: Wait for service stability (optional)
+        run: |
+          aws ecs wait services-stable --cluster "${{ secrets.ECS_CLUSTER }}" --services "${{ secrets.ECS_SERVICE }}"
+        env:
+          AWS_REGION: ${{ env.AWS_REGION }}
