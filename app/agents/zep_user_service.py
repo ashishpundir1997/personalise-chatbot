@@ -18,21 +18,26 @@ class ZepUserService:
 
     CONTEXT_TEMPLATE_CONTENT = """
 
-
-
-# USER PREFERENCES
+# USER PROFILE & FACTS
 
 %{user_summary}
 
-# DO NOT INCLUDE EMOTIONAL MEMORY
+# KEY USER ENTITIES & TRAITS
 
-%{edges types=[emotion] limit=0}
+%{entities types=[person,personality_trait,skill,hobby,goal,fact,preference,location,occupation,relationship] limit=20}
 
-%{entities types=[emotion] limit=0}
+# USER INTERESTS & TOPICS
 
-IMPORTANT: Use ONLY permanent preferences.
+%{entities types=[topic,interest,technology,project] limit=15}
 
-Ignore emotional states, feelings, session context, or past conversation details.
+# DO NOT INCLUDE EMOTIONAL STATES OR TEMPORAL CONTEXT
+
+%{edges types=[emotion,feeling,mood] limit=0}
+
+%{entities types=[emotion,feeling,mood] limit=0}
+
+IMPORTANT: This memory contains PERSISTENT USER FACTS - who they are, what they do, their interests, skills, and preferences.
+Use this to build a personality profile when the user asks "Who am I?" or "Tell me about myself."
 
 """
     
@@ -402,42 +407,6 @@ Ignore emotional states, feelings, session context, or past conversation details
                 return None
 
             context = memory.context
-
-            # Filter USER PREFERENCES section for new sessions - remove conversational/temporal language
-            # Zep stores everything in user_summary, so we filter out temporal phrases while keeping permanent facts
-            if message_count == 0 and context:
-                # Compile temporal patterns once for performance
-                temporal_pattern = re.compile(
-                    r'\b(recently|currently|just|now|at the moment|this (week|month|time|period)|due to a current|is currently|has recently|was recently|when.*expresses.*must)\b',
-                    re.IGNORECASE
-                )
-                
-                def filter_user_preferences(match):
-                    user_prefs_content = match.group(1) if match.lastindex >= 1 else ""
-                    if not user_prefs_content:
-                        return ''
-                    
-                    # Split into sentences and filter
-                    sentences = re.split(r'([.!?]\s+)', user_prefs_content)
-                    filtered_parts = []
-                    
-                    for i in range(0, len(sentences), 2):
-                        if i < len(sentences):
-                            sentence = sentences[i].strip()
-                            if sentence and not temporal_pattern.search(sentence):
-                                punctuation = sentences[i + 1] if i + 1 < len(sentences) else ""
-                                filtered_parts.append(sentence + punctuation)
-                    
-                    filtered_content = ''.join(filtered_parts).strip()
-                    return f'# USER PREFERENCES\n\n{filtered_content}' if filtered_content else ''
-                
-                # Match and filter USER PREFERENCES section
-                context = re.sub(
-                    r'# USER PREFERENCES\s*\n(.*?)(?=\n#|\Z)',
-                    filter_user_preferences,
-                    context,
-                    flags=re.DOTALL
-                ).strip()
 
             # Log memory retrieval (debug level only to reduce latency)
             self.logger.debug(f"[Zep] Memory retrieved: {len(context)} chars for user_id={user_id}, thread_id={thread_id}")

@@ -98,7 +98,7 @@ async def on_startup():
         smtp_username = os.getenv("SMTP_USER_NAME", "")
         smtp_password = os.getenv("SMTP_PASSWORD", "")
         if smtp_username and smtp_password:
-            email_cfg = EmailConfig(
+            email_cfg = EmailConfig( 
                 smtp_server=os.getenv("SMTP_SERVER", "smtp.gmail.com"),
                 smtp_port=int(os.getenv("SMTP_PORT", "587")),
                 username=smtp_username,

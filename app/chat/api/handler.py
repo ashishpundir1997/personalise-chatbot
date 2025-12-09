@@ -292,32 +292,26 @@ async def handle_chat(
             logger.warning("Zep user service not available - agent will run without memory context")
         
         # Fetch persistent user memory from Zep and prepend to message_history
-        # SKIP Zep memory for the first message in a new conversation to avoid referencing past topics
-        # Only load memory after the first exchange (message_count >= 1 after user message is saved)
+        # ALWAYS load user profile/facts memory - this contains "who they are" across all sessions
+        # Only skip conversation-specific context for new chats to avoid topic bleeding
         enhanced_message_history = list(message_history) if message_history else []
         if zep_user_service and postgres_user_id:
             # Use the message_count from BEFORE we saved the user message
             # This correctly identifies new conversations (count=0) vs continuing ones (count>0)
             message_count = current_message_count if session_service and session_id else 0
             
-            # Skip Zep memory for the first message in a new conversation
-            # This ensures fresh start without past context bleeding in
-            if message_count > 0:
-                # Only load memory for continuing conversations (after first exchange)
-                user_context = await zep_user_service.get_user_context(postgres_user_id, message_count=message_count)
-                if user_context:
-                    # Prepend user memory as a system message to message_history
-                    memory_content = f"# USER MEMORY (Persistent Preferences & Facts)\n{user_context}\n\nUse this memory to remember user preferences, facts, and context across conversations."
-                    
-                    # DEBUG: Log the full memory content being sent to LLM
-
-                    
-                    memory_system_message = ModelRequest(parts=[UserPromptPart(content=memory_content)])
-                    enhanced_message_history = [memory_system_message] + enhanced_message_history
-                else:
-                    logger.info(f"[ChatHandler] No Zep memory context available for user {postgres_user_id} (message_count={message_count})")
+            # ALWAYS load user memory - even for new conversations
+            # This ensures the agent remembers WHO the user is across all sessions
+            user_context = await zep_user_service.get_user_context(postgres_user_id, message_count=message_count)
+            if user_context:
+                # Prepend user memory as a system message to message_history
+                memory_content = f"# USER MEMORY (Persistent Profile & Facts)\n{user_context}\n\nThis contains everything you know about the user - who they are, their interests, skills, and preferences.\nUse this to answer questions like 'Who am I?' or 'Tell me about myself.'\nFor new conversations, use this to personalize your greeting but don't reference specific past topics unless relevant."
+                
+                memory_system_message = ModelRequest(parts=[UserPromptPart(content=memory_content)])
+                enhanced_message_history = [memory_system_message] + enhanced_message_history
+                logger.info(f"[ChatHandler] Loaded user memory for user {postgres_user_id} (message_count={message_count})")
             else:
-                logger.info(f"[ChatHandler] Skipping Zep memory for new conversation (message_count={current_message_count if session_service and session_id else 0})")
+                logger.info(f"[ChatHandler] No Zep memory context available for user {postgres_user_id} (message_count={message_count})")
         
         result = await agent.run(
             user_id=postgres_user_id or "",  # Same user_id used in Zep
@@ -528,31 +522,26 @@ async def handle_chat_stream(
             logger.warning("Zep user service not available - agent will run without memory context")
         
         # Fetch persistent user memory from Zep and prepend to message_history
-        # SKIP Zep memory for the first message in a new conversation to avoid referencing past topics
-        # Only load memory after the first exchange (message_count >= 1 after user message is saved)
+        # ALWAYS load user profile/facts memory - this contains "who they are" across all sessions
+        # Only skip conversation-specific context for new chats to avoid topic bleeding
         enhanced_message_history = list(message_history) if message_history else []
         if zep_user_service and postgres_user_id:
             # Use the message_count from BEFORE we saved the user message
             # This correctly identifies new conversations (count=0) vs continuing ones (count>0)
             message_count = current_message_count if session_service and session_id else 0
             
-            # Skip Zep memory for the first message in a new conversation
-            # This ensures fresh start without past context bleeding in
-            if message_count > 0:
-                # Only load memory for continuing conversations (after first exchange)
-                user_context = await zep_user_service.get_user_context(postgres_user_id, message_count=message_count)
-                if user_context:
-                    # Prepend user memory as a system message to message_history
-                    memory_content = f"# USER MEMORY (Persistent Preferences & Facts)\n{user_context}\n\nUse this memory to remember user preferences, facts, and context across conversations."
-                    
-                    # DEBUG: Log the full memory content being sent to LLM
-                    
-                    memory_system_message = ModelRequest(parts=[UserPromptPart(content=memory_content)])
-                    enhanced_message_history = [memory_system_message] + enhanced_message_history
-                else:
-                    logger.info(f"[ChatHandler] No Zep memory context available for user {postgres_user_id} (message_count={message_count})")
+            # ALWAYS load user memory - even for new conversations
+            # This ensures the agent remembers WHO the user is across all sessions
+            user_context = await zep_user_service.get_user_context(postgres_user_id, message_count=message_count)
+            if user_context:
+                # Prepend user memory as a system message to message_history
+                memory_content = f"# USER MEMORY (Persistent Profile & Facts)\n{user_context}\n\nThis contains everything you know about the user - who they are, their interests, skills, and preferences.\nUse this to answer questions like 'Who am I?' or 'Tell me about myself.'\nFor new conversations, use this to personalize your greeting but don't reference specific past topics unless relevant."
+                
+                memory_system_message = ModelRequest(parts=[UserPromptPart(content=memory_content)])
+                enhanced_message_history = [memory_system_message] + enhanced_message_history
+                logger.info(f"[ChatHandler] Loaded user memory for user {postgres_user_id} (message_count={message_count})")
             else:
-                logger.info(f"[ChatHandler] Skipping Zep memory for new conversation (message_count={current_message_count if session_service and session_id else 0})")
+                logger.info(f"[ChatHandler] No Zep memory context available for user {postgres_user_id} (message_count={message_count})")
 
         async with agent.run_stream(
             user_id=postgres_user_id or "",  # Same user_id used in Zep
