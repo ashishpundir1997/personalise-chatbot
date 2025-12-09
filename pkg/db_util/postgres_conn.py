@@ -6,6 +6,7 @@ from pkg.db_util.types import PostgresConfig
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, AsyncEngine, async_sessionmaker
 from sqlalchemy.engine.url import URL
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import event
 from pkg.log.logger import get_logger
 
 
@@ -97,10 +98,11 @@ class PostgresConnection:
             engine = create_async_engine(
                 self._db_url,
                 echo=False,  # Set to True for debugging SQL
-                # echo_pool="debug", # Set to "debug" for verbose pool logging
+                # echo_pool="debug", # Set to "debug" for verbose pool logging  
                 **pool_opts
             )
-            # Optionally, test the connection immediately
+            
+            # Test the connection immediately
             async with engine.connect() as conn:
                 self.logger.info("Database connection tested successfully.")
 
