@@ -11,6 +11,7 @@ from pkg.db_util.types import PostgresConfig
 from app.auth.api.routes import auth_router
 from app.user.api.routes import user_router
 from pkg.redis.client import RedisClient
+from pkg.redis.upstash_client import UpstashRedisClient
 from pkg.smtp_client.client import EmailClient, EmailConfig
 from pkg.auth_token_client.client import TokenClient
 from app.user.repository.user_repository import UserRepository
@@ -87,11 +88,29 @@ async def on_startup():
         jwt_secret = os.getenv("JWT_SUPER_SECRET", "dev-secret")
         jwt_refresh_secret = os.getenv("JWT_REFRESH_SECRET", "dev-refresh-secret")
         token_client = TokenClient(jwt_secret, jwt_refresh_secret)
-        # Redis client
-        redis_host = os.getenv("REDIS_HOST", "localhost")
-        redis_port = int(os.getenv("REDIS_PORT", "6379"))
-        redis_password = os.getenv("REDIS_PASSWORD") or None
-        redis_client = RedisClient(logger, host=redis_host, port=redis_port, password=redis_password)
+        
+        # Redis client - Check if we should use Upstash REST API
+        upstash_url = os.getenv("UPSTASH_REDIS_REST_URL")
+        upstash_token = os.getenv("UPSTASH_REDIS_REST_TOKEN")
+        
+        if upstash_url and upstash_token:
+            logger.info("Using Upstash Redis REST API...")
+            redis_client = UpstashRedisClient(logger, url=upstash_url, token=upstash_token)
+            # Test connection
+            if redis_client.ping():
+                logger.info("Connected to Upstash Redis successfully via REST API!")
+            else:
+                raise Exception("Failed to ping Upstash Redis")
+        else:
+            # Fallback to traditional Redis
+            redis_host = os.getenv("REDIS_HOST", "localhost")
+            redis_port = int(os.getenv("REDIS_PORT", "6379"))
+            redis_password = os.getenv("REDIS_PASSWORD") or None
+            redis_ssl = os.getenv("REDIS_SSL", "false").lower() == "true"
+            logger.info(f"Using traditional Redis at {redis_host}:{redis_port}")
+            redis_client = RedisClient(logger, host=redis_host, port=redis_port, password=redis_password, ssl=redis_ssl)
+            logger.info("Connected to Redis successfully!")
+        
         # Initialize session_service (use shared postgres_conn to avoid creating new engine per request)
         session_service = ConversationManager(redis_client=redis_client, postgres_conn=postgres_conn)
         # Email client (use no-op in dev if creds missing)

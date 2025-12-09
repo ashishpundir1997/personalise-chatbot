@@ -14,13 +14,14 @@ class RedisClient:
     Enhanced Redis client with connection pooling and performance optimizations.
     """
 
-    def __init__(self, logger: logging.Logger, host: str = "localhost", port: int = 6379, password: Optional[str] = None):
+    def __init__(self, logger: logging.Logger, host: str = "localhost", port: int = 6379, password: Optional[str] = None, ssl: bool = False):
         self.logger = logger
         self._redis: Optional[Redis] = None
         self._pool: Optional[ConnectionPool] = None
         self.host = host
         self.port = port
         self.password = password
+        self.ssl = ssl
 
         # Async Redis client for async operations
         self._async_redis: Optional[aioredis.Redis] = None
@@ -38,20 +39,28 @@ class RedisClient:
         """Establish connection pool to Redis"""
         try:
             # Use connection pool for better performance
-            self._pool = ConnectionPool(
-                host=self.host,
-                port=self.port,
-                password=self.password,
-                max_connections=20,  # Limit connections for resource efficiency
-                decode_responses=True,  # Auto-decode responses for convenience
-                socket_timeout=5.0,  # Socket timeout in seconds
-                socket_connect_timeout=5.0,  # Connection timeout
-                retry_on_timeout=True  # Auto-retry on timeout
-            )
+            pool_kwargs = {
+                'host': self.host,
+                'port': self.port,
+                'password': self.password,
+                'max_connections': 20,  # Limit connections for resource efficiency
+                'decode_responses': True,  # Auto-decode responses for convenience
+                'socket_timeout': 5.0,  # Socket timeout in seconds
+                'socket_connect_timeout': 5.0,  # Connection timeout
+                'retry_on_timeout': True  # Auto-retry on timeout
+            }
+            
+            # Add SSL if enabled
+            if self.ssl:
+                pool_kwargs['ssl'] = True
+                pool_kwargs['ssl_cert_reqs'] = None  # Don't verify SSL certificates for Upstash
+            
+            self._pool = ConnectionPool(**pool_kwargs)
 
             self._redis = Redis(connection_pool=self._pool)
             self._redis.ping()  # Test connection
-            self.logger.info(f"Successfully connected to Redis pool at {self.host}:{self.port}")
+            ssl_status = "with SSL" if self.ssl else "without SSL"
+            self.logger.info(f"Successfully connected to Redis pool at {self.host}:{self.port} {ssl_status}")
         except RedisError as e:
             self.logger.error(f"Failed to connect to Redis: {str(e)}")
             raise
