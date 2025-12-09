@@ -48,10 +48,21 @@ virtualenv/
 # Environment variables and secrets
 .env
 *.env
+.env.local
+.env.*.local
 
 # Docker
 docker-compose.override.yml
 # Note: docker-compose.yml may contain secrets - review before committing!
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# AWS & Cloud credentials
+.aws/
+credentials
 
 # OS files
 .DS_Store
@@ -101,3 +112,18 @@ yarn-debug.log*
 yarn-error.log*
 package-lock.json
 yarn.lock
+
+# Project-specific
+# ECS task definitions (may contain secrets)
+ecs/task-definition.json
+
+# Redis dump files
+dump.rdb
+
+# PostgreSQL
+*.pgsql
+postgres_data/
+
+# Development files
+.env.example  # Keep this commented out so the example IS tracked
+# But don't track actual .env files (already covered above)
