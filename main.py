@@ -93,7 +93,7 @@ async def on_startup():
         logger.error(error_msg)
         logger.error("Please set these environment variables in your Railway dashboard or .env file")
         logger.error("Current working directory: " + os.getcwd())
-        logger.error("Python path: " + os.sys.executable)
+        logger.error("Python path: " + sys.executable)
         raise RuntimeError(error_msg)
     
     logger.info(f"Connecting to database at: {required_env_vars['POSTGRES_HOST']}")

@@ -2,7 +2,7 @@
 builder = "NIXPACKS"
 
 [deploy]
-startCommand = "uvicorn main:app --host 0.0.0.0 --port $PORT --timeout-keep-alive 120"
+startCommand = "uvicorn main:app --host 0.0.0.0 --port $PORT --timeout-keep-alive 120 --log-level info"
 healthcheckPath = "/health"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
