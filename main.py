@@ -239,38 +239,58 @@ async def on_startup():
         logger.info("✓ Startup complete - application is ready!")
     except Exception as e:
         logger.error(f"✗ Startup failed: {e}", exc_info=True)
-        # Don't re-raise - let the app start anyway for debugging
-        # The health check will show what's wrong
-        logger.error("Application started with errors - check logs above")
-        raise e
+        logger.error("Application will start in degraded mode - check logs above")
+        logger.error("Health endpoint will be available to check status")
+        
+        # Set minimal app.state so health endpoint works
+        if not hasattr(app.state, "logger"):
+            app.state.logger = logger
+        if not hasattr(app.state, "postgres_conn"):
+            app.state.postgres_conn = None
+        if not hasattr(app.state, "redis_client"):
+            app.state.redis_client = None
+        
+        # Don't raise - let app start so we can debug via health endpoint
     
 # Health Check Endpoint
 @app.get("/health")
 async def health():
     """Enhanced health check that shows service status"""
-    status = {
-        "status": "ok",
-        "service": "neo-chat-wrapper",
-        "checks": {}
-    }
+    all_healthy = True
+    checks = {}
     
     # Check if postgres is connected
     try:
         if hasattr(app.state, "postgres_conn") and app.state.postgres_conn:
-            status["checks"]["database"] = "connected"
+            checks["database"] = "✓ connected"
         else:
-            status["checks"]["database"] = "not_initialized"
+            checks["database"] = "✗ not_initialized"
+            all_healthy = False
     except Exception as e:
-        status["checks"]["database"] = f"error: {str(e)}"
+        checks["database"] = f"✗ error: {str(e)}"
+        all_healthy = False
     
     # Check if redis is connected
     try:
         if hasattr(app.state, "redis_client") and app.state.redis_client:
-            status["checks"]["redis"] = "connected"
+            checks["redis"] = "✓ connected"
         else:
-            status["checks"]["redis"] = "not_initialized"
+            checks["redis"] = "✗ not_initialized"
+            all_healthy = False
     except Exception as e:
-        status["checks"]["redis"] = f"error: {str(e)}"
+        checks["redis"] = f"✗ error: {str(e)}"
+        all_healthy = False
+    
+    # Check other services
+    checks["session_service"] = "✓ ready" if hasattr(app.state, "session_service") and app.state.session_service else "✗ not_ready"
+    checks["auth_service"] = "✓ ready" if hasattr(app.state, "auth_service") and app.state.auth_service else "✗ not_ready"
+    checks["user_service"] = "✓ ready" if hasattr(app.state, "user_service") and app.state.user_service else "✗ not_ready"
+    
+    status = {
+        "status": "ok" if all_healthy else "degraded",
+        "service": "neo-chat-wrapper",
+        "checks": checks
+    }
     
     return status
 
