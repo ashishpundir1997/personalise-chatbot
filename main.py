@@ -53,6 +53,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 # DB & Services Initialization - Will be initialized in startup event
 postgres_conn = None
 chat_repo = None
+startup_complete = False  # Track if startup finished
 
 # Routers
 app.include_router(chat_router)
@@ -60,9 +61,12 @@ app.include_router(auth_router)
 app.include_router(user_router)
 @app.on_event("startup")
 async def on_startup():
-    global postgres_conn, chat_repo
+    global postgres_conn, chat_repo, startup_complete
     
     logger.info("Neo Chat Wrapper starting up...")
+    logger.info(f"Python: {sys.version}")
+    logger.info(f"Working directory: {os.getcwd()}")
+    logger.info(f"PORT from env: {os.getenv('PORT', 'NOT SET')}")
     
     # Debug: Print all environment variables (mask sensitive values)
     logger.info("=== Environment Variables Check ===")
@@ -91,10 +95,15 @@ async def on_startup():
     if missing_vars:
         error_msg = f"Missing required environment variables: {', '.join(missing_vars)}"
         logger.error(error_msg)
-        logger.error("Please set these environment variables in your Railway dashboard or .env file")
-        logger.error("Current working directory: " + os.getcwd())
-        logger.error("Python path: " + sys.executable)
-        raise RuntimeError(error_msg)
+        logger.error("Please set these environment variables in your Railway dashboard")
+        logger.error("Application will start in degraded mode")
+        
+        # Set minimal state and mark startup complete so health endpoint works
+        startup_complete = True
+        app.state.logger = logger
+        app.state.postgres_conn = None
+        app.state.redis_client = None
+        return  # Exit startup early - don't crash
     
     logger.info(f"Connecting to database at: {required_env_vars['POSTGRES_HOST']}")
     
@@ -236,6 +245,8 @@ async def on_startup():
         app.state.auth_service = auth_service
         app.state.session_service = session_service
         app.state.zep_user_service = zep_user_service
+        
+        startup_complete = True  # Mark startup as successful
         logger.info("✓ Startup complete - application is ready!")
     except Exception as e:
         logger.error(f"✗ Startup failed: {e}", exc_info=True)
@@ -250,12 +261,23 @@ async def on_startup():
         if not hasattr(app.state, "redis_client"):
             app.state.redis_client = None
         
+        startup_complete = True  # Mark complete even on error so health works
+        
         # Don't raise - let app start so we can debug via health endpoint
     
 # Health Check Endpoint
 @app.get("/health")
 async def health():
     """Enhanced health check that shows service status"""
+    
+    # Return starting status if startup not complete yet
+    if not startup_complete:
+        return {
+            "status": "starting",
+            "service": "neo-chat-wrapper",
+            "message": "Application is still starting up..."
+        }
+    
     all_healthy = True
     checks = {}
     
