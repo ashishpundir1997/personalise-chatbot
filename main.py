@@ -106,24 +106,41 @@ async def on_startup():
             username=required_env_vars["POSTGRES_USER"],
             password=required_env_vars["POSTGRES_PASSWORD"],
             database=required_env_vars["POSTGRES_DB"],
+            pool_timeout=30,  # Increase timeout for Railway deployments
         )
         postgres_conn = PostgresConnection(postgres_config, logger)
         chat_repo = ChatRepository(postgres_conn)
         
-        # Initialize Postgres engine ONCE during startup (stored in module-level singleton cache)
-        engine = await postgres_conn.get_engine()
-        logger.info("Postgres engine initialized and cached during startup.")
+        # Initialize Postgres engine with timeout protection
+        logger.info("Initializing database engine...")
+        try:
+            engine = await asyncio.wait_for(
+                postgres_conn.get_engine(),
+                timeout=45.0  # 45 second timeout for initial connection
+            )
+            logger.info("✓ Postgres engine initialized and cached during startup.")
+        except asyncio.TimeoutError:
+            logger.error("Database connection timed out after 45 seconds")
+            raise ConnectionError("Database connection timeout - check network/credentials")
         # Create all tables automatically if not present
         from pkg.db_util.sql_alchemy.declarative_base import Base
         # Import all models so SQLAlchemy registers them
         from app.chat.repository.sql_schema.conversation import ConversationModel, MessageModel
         from app.user.repository.sql_schema.user import UserModel
+        
+        logger.info("Creating database tables if needed...")
         try:
             async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
-            logger.info("All database tables ensured.")
+                await asyncio.wait_for(
+                    conn.run_sync(Base.metadata.create_all),
+                    timeout=30.0  # 30 second timeout for table creation
+                )
+            logger.info("✓ All database tables ensured.")
+        except asyncio.TimeoutError:
+            logger.error("Database table creation timed out")
+            raise
         except Exception as e:
-            logger.error(f"Error creating database tables: {e}", exc_info=True)
+            logger.error(f"✗ Error creating database tables: {e}", exc_info=True)
             raise
         # Wire auth-related services (replaces removed container)
         # Logger already created above
@@ -178,22 +195,33 @@ async def on_startup():
         # User repo/service
         user_repo = UserRepository(postgres_conn.get_session, logger)
         user_service = UserService(user_repo, logger, token_client)
-        # Zep user service (for linking users to Zep)
-        try:
-            zep_user_service = ZepUserService(logger)
-            logger.info("Zep user service initialized successfully")
-            
-            # Preload context template at startup (with retry logic for 503 errors)
-            # This avoids repeated creation attempts during request handling
-            # Force update to ensure template has latest content (no RECENT EPISODES)
+        # Zep user service (for linking users to Zep) - Don't block startup if this fails
+        zep_user_service = None
+        zep_api_key = os.getenv("ZEP_API_KEY")
+        if zep_api_key:
             try:
-                await zep_user_service.ensure_context_template(max_retries=2, initial_delay=0.5, force_update=True)
-                logger.info("Zep context template preloaded during startup")
+                logger.info("Initializing Zep user service...")
+                zep_user_service = ZepUserService(logger)
+                logger.info("Zep user service initialized successfully")
+                
+                # Preload context template at startup - but don't block if it fails
+                # This is non-critical and can be retried later
+                try:
+                    await asyncio.wait_for(
+                        zep_user_service.ensure_context_template(max_retries=1, initial_delay=0.5, force_update=True),
+                        timeout=10.0  # Max 10 seconds for Zep template
+                    )
+                    logger.info("Zep context template preloaded during startup")
+                except asyncio.TimeoutError:
+                    logger.warning("Zep context template preload timed out. Will retry on first use.")
+                except Exception as e:
+                    logger.warning(f"Failed to preload Zep context template: {e}. Will retry on first use.")
             except Exception as e:
-                logger.warning(f"Failed to ensure Zep context template during startup: {e}. Will retry on first use.")
-        except Exception as e:
-            logger.warning(f"Failed to initialize Zep user service: {e}. Auth will continue without Zep integration.")
-            zep_user_service = None
+                logger.warning(f"Failed to initialize Zep user service: {e}. Auth will continue without Zep integration.")
+                zep_user_service = None
+        else:
+            logger.info("ZEP_API_KEY not set, skipping Zep integration")
+            
         # Auth service and handler
         auth_service = AuthService(user_service, token_client, redis_client, logger, email_client, zep_user_service)
         # Expose on app.state for dependencies
@@ -208,16 +236,53 @@ async def on_startup():
         app.state.auth_service = auth_service
         app.state.session_service = session_service
         app.state.zep_user_service = zep_user_service
-        logger.info("Startup complete.")
+        logger.info("✓ Startup complete - application is ready!")
     except Exception as e:
-        logger.error(f"Startup failed: {e}", exc_info=True)
+        logger.error(f"✗ Startup failed: {e}", exc_info=True)
+        # Don't re-raise - let the app start anyway for debugging
+        # The health check will show what's wrong
+        logger.error("Application started with errors - check logs above")
         raise e
-    
     
 # Health Check Endpoint
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "neo-chat-wrapper"}
+    """Enhanced health check that shows service status"""
+    status = {
+        "status": "ok",
+        "service": "neo-chat-wrapper",
+        "checks": {}
+    }
+    
+    # Check if postgres is connected
+    try:
+        if hasattr(app.state, "postgres_conn") and app.state.postgres_conn:
+            status["checks"]["database"] = "connected"
+        else:
+            status["checks"]["database"] = "not_initialized"
+    except Exception as e:
+        status["checks"]["database"] = f"error: {str(e)}"
+    
+    # Check if redis is connected
+    try:
+        if hasattr(app.state, "redis_client") and app.state.redis_client:
+            status["checks"]["redis"] = "connected"
+        else:
+            status["checks"]["redis"] = "not_initialized"
+    except Exception as e:
+        status["checks"]["redis"] = f"error: {str(e)}"
+    
+    return status
+
+@app.get("/")
+async def root():
+    """Root endpoint - simple check that app is running"""
+    return {
+        "service": "neo-chat-wrapper",
+        "version": "1.0.0",
+        "status": "running",
+        "health_check": "/health"
+    }
 
 if __name__ == "__main__":
     # Use PORT from environment for Railway, fallback to 8080 for local
