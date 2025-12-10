@@ -48,16 +48,10 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         },
         headers=exc.headers
     )
-# DB & Services Initialization
-postgres_config = PostgresConfig(
-    host=os.getenv("POSTGRES_HOST", "localhost"),
-    port=int(os.getenv("POSTGRES_PORT", "5432")),
-    username=os.getenv("POSTGRES_USER", "postgres"),
-    password=os.getenv("POSTGRES_PASSWORD", ""),
-    database=os.getenv("POSTGRES_DB", "projectneo"),
-)
-postgres_conn = PostgresConnection(postgres_config, logger)
-chat_repo = ChatRepository(postgres_conn)
+
+# DB & Services Initialization - Will be initialized in startup event
+postgres_conn = None
+chat_repo = None
 
 # Routers
 app.include_router(chat_router)
@@ -65,8 +59,39 @@ app.include_router(auth_router)
 app.include_router(user_router)
 @app.on_event("startup")
 async def on_startup():
+    global postgres_conn, chat_repo
+    
     logger.info("Neo Chat Wrapper starting up...")
+    
+    # Validate critical environment variables
+    required_env_vars = {
+        "POSTGRES_HOST": os.getenv("POSTGRES_HOST"),
+        "POSTGRES_USER": os.getenv("POSTGRES_USER"),
+        "POSTGRES_PASSWORD": os.getenv("POSTGRES_PASSWORD"),
+        "POSTGRES_DB": os.getenv("POSTGRES_DB"),
+    }
+    
+    missing_vars = [key for key, value in required_env_vars.items() if not value]
+    if missing_vars:
+        error_msg = f"Missing required environment variables: {', '.join(missing_vars)}"
+        logger.error(error_msg)
+        logger.error("Please set these environment variables in your Railway dashboard or .env file")
+        raise RuntimeError(error_msg)
+    
+    logger.info(f"Connecting to database at: {required_env_vars['POSTGRES_HOST']}")
+    
     try:
+        # Initialize Postgres connection with validated environment variables
+        postgres_config = PostgresConfig(
+            host=required_env_vars["POSTGRES_HOST"],
+            port=int(os.getenv("POSTGRES_PORT", "5432")),
+            username=required_env_vars["POSTGRES_USER"],
+            password=required_env_vars["POSTGRES_PASSWORD"],
+            database=required_env_vars["POSTGRES_DB"],
+        )
+        postgres_conn = PostgresConnection(postgres_config, logger)
+        chat_repo = ChatRepository(postgres_conn)
+        
         # Initialize Postgres engine ONCE during startup (stored in module-level singleton cache)
         engine = await postgres_conn.get_engine()
         logger.info("Postgres engine initialized and cached during startup.")
@@ -155,6 +180,8 @@ async def on_startup():
         auth_service = AuthService(user_service, token_client, redis_client, logger, email_client, zep_user_service)
         # Expose on app.state for dependencies
         app.state.logger = logger
+        app.state.postgres_conn = postgres_conn
+        app.state.chat_repo = chat_repo
         app.state.token_client = token_client
         app.state.redis_client = redis_client
         app.state.email_client = email_client
