@@ -83,7 +83,6 @@ pathable==0.4.4
 pathvalidate==3.3.1
 platformdirs==4.5.0
 prompt_toolkit==3.0.52
-protobuf==6.33.0
 py-key-value-aio==0.2.8
 py-key-value-shared==0.2.8
 pyasn1==0.6.1
@@ -133,6 +132,4 @@ websockets==15.0.1
 wrapt==1.17.3
 zipp==3.23.0
 zep-cloud==3.13.0
-
-
 protobuf>=5.0,<6.0
