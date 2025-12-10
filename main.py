@@ -21,6 +21,7 @@ from app.agents.zep_user_service import ZepUserService
 from dotenv import load_dotenv
 import asyncio
 import os
+import sys
 # App & Logger Setup
 # Load .env so os.getenv picks up values from your .env file
 load_dotenv()
@@ -63,12 +64,27 @@ async def on_startup():
     
     logger.info("Neo Chat Wrapper starting up...")
     
-    # Validate critical environment variables
+    # Debug: Print all environment variables (mask sensitive values)
+    logger.info("=== Environment Variables Check ===")
+    env_vars_to_check = ["POSTGRES_HOST", "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", 
+                         "POSTGRES_PORT", "UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN"]
+    for var in env_vars_to_check:
+        value = os.getenv(var)
+        if value:
+            if "PASSWORD" in var or "TOKEN" in var or "SECRET" in var:
+                logger.info(f"{var}: ***MASKED*** (length: {len(value)})")
+            else:
+                logger.info(f"{var}: {value}")
+        else:
+            logger.warning(f"{var}: NOT SET or EMPTY")
+    logger.info("===================================")
+    
+    # Validate critical environment variables (strip whitespace)
     required_env_vars = {
-        "POSTGRES_HOST": os.getenv("POSTGRES_HOST"),
-        "POSTGRES_USER": os.getenv("POSTGRES_USER"),
-        "POSTGRES_PASSWORD": os.getenv("POSTGRES_PASSWORD"),
-        "POSTGRES_DB": os.getenv("POSTGRES_DB"),
+        "POSTGRES_HOST": os.getenv("POSTGRES_HOST", "").strip(),
+        "POSTGRES_USER": os.getenv("POSTGRES_USER", "").strip(),
+        "POSTGRES_PASSWORD": os.getenv("POSTGRES_PASSWORD", "").strip(),
+        "POSTGRES_DB": os.getenv("POSTGRES_DB", "").strip(),
     }
     
     missing_vars = [key for key, value in required_env_vars.items() if not value]
@@ -76,6 +92,8 @@ async def on_startup():
         error_msg = f"Missing required environment variables: {', '.join(missing_vars)}"
         logger.error(error_msg)
         logger.error("Please set these environment variables in your Railway dashboard or .env file")
+        logger.error("Current working directory: " + os.getcwd())
+        logger.error("Python path: " + os.sys.executable)
         raise RuntimeError(error_msg)
     
     logger.info(f"Connecting to database at: {required_env_vars['POSTGRES_HOST']}")
@@ -200,5 +218,8 @@ async def on_startup():
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "neo-chat-wrapper"}
+
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
+    # Use PORT from environment for Railway, fallback to 8080 for local
+    port = int(os.getenv("PORT", "8080"))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
