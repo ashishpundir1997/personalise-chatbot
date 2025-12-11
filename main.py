@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
+from starlette.middleware.base import BaseHTTPMiddleware
 import uvicorn
 from app.chat.api.route import chat_router
 from app.chat.service.session_service import ConversationManager
@@ -249,6 +250,39 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+# Startup Check Middleware - ensures no requests processed before startup completes
+class StartupCheckMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Allow health checks during startup
+        if request.url.path in ["/health", "/", "/docs", "/openapi.json"]:
+            return await call_next(request)
+        
+        # Check if startup is complete
+        if not getattr(request.app.state, "startup_complete", False):
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": False,
+                    "message": "Service is starting up. Please retry in a few seconds."
+                }
+            )
+        
+        # Check for startup errors
+        startup_error = getattr(request.app.state, "startup_error", None)
+        if startup_error:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": False,
+                    "message": f"Service initialization failed: {startup_error}"
+                }
+            )
+        
+        return await call_next(request)
+
+# Add middleware in correct order
+app.add_middleware(StartupCheckMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # adjust in prod

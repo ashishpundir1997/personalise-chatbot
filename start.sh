@@ -10,5 +10,5 @@ echo "PORT: ${PORT:-'not set'}"
 echo "POSTGRES_HOST: ${POSTGRES_HOST:-'not set'}"
 echo "=================================================="
 
-# Start the application
-exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080} --timeout-keep-alive 120 --log-level info
+# Start the application with proper timeout settings
+exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080} --timeout-keep-alive 120 --log-level info --timeout-graceful-shutdown 30 --no-access-log
