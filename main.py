@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from contextlib import asynccontextmanager
 import uvicorn
 from app.chat.api.route import chat_router
 from app.chat.service.session_service import ConversationManager
@@ -25,44 +26,13 @@ import sys
 # App & Logger Setup
 # Load .env so os.getenv picks up values from your .env file
 load_dotenv()
-app = FastAPI(
-    title="Neo Chat Wrapper",
-    description="Unified LLM & Chat Orchestration Service",
-    version="1.0.0",
-)
+
 logger = get_logger("neo-chat-wrapper")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # adjust in prod
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
-    """Convert HTTPException to standardized error format"""
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "status": False,
-            "message": exc.detail
-        },
-        headers=exc.headers
-    )
 
-# DB & Services Initialization - Will be initialized in startup event
-postgres_conn = None
-chat_repo = None
-startup_complete = False  # Track if startup finished
-
-# Routers
-app.include_router(chat_router)
-app.include_router(auth_router)
-app.include_router(user_router)
-@app.on_event("startup")
-async def on_startup():
-    global postgres_conn, chat_repo, startup_complete
-    
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager - ensures startup completes before accepting requests"""
+    # Startup
     logger.info("Neo Chat Wrapper starting up...")
     logger.info(f"Python: {sys.version}")
     logger.info(f"Working directory: {os.getcwd()}")
@@ -98,12 +68,15 @@ async def on_startup():
         logger.error("Please set these environment variables in your Railway dashboard")
         logger.error("Application will start in degraded mode")
         
-        # Set minimal state and mark startup complete so health endpoint works
-        startup_complete = True
+        # Set minimal state so health endpoint works
         app.state.logger = logger
         app.state.postgres_conn = None
         app.state.redis_client = None
-        return  # Exit startup early - don't crash
+        app.state.startup_complete = False
+        app.state.startup_error = error_msg
+        
+        yield  # App runs in degraded mode
+        return
     
     logger.info(f"Connecting to database at: {required_env_vars['POSTGRES_HOST']}")
     
@@ -131,6 +104,7 @@ async def on_startup():
         except asyncio.TimeoutError:
             logger.error("Database connection timed out after 45 seconds")
             raise ConnectionError("Database connection timeout - check network/credentials")
+        
         # Create all tables automatically if not present
         from pkg.db_util.sql_alchemy.declarative_base import Base
         # Import all models so SQLAlchemy registers them
@@ -151,9 +125,8 @@ async def on_startup():
         except Exception as e:
             logger.error(f"✗ Error creating database tables: {e}", exc_info=True)
             raise
-        # Wire auth-related services (replaces removed container)
-        # Logger already created above
-        # Token client from env
+        
+        # Wire auth-related services
         jwt_secret = os.getenv("JWT_SUPER_SECRET", "dev-secret")
         jwt_refresh_secret = os.getenv("JWT_REFRESH_SECRET", "dev-refresh-secret")
         token_client = TokenClient(jwt_secret, jwt_refresh_secret)
@@ -180,9 +153,10 @@ async def on_startup():
             redis_client = RedisClient(logger, host=redis_host, port=redis_port, password=redis_password, ssl=redis_ssl)
             logger.info("Connected to Redis successfully!")
         
-        # Initialize session_service (use shared postgres_conn to avoid creating new engine per request)
+        # Initialize session_service
         session_service = ConversationManager(redis_client=redis_client, postgres_conn=postgres_conn)
-        # Email client (use no-op in dev if creds missing)
+        
+        # Email client
         smtp_username = os.getenv("SMTP_USER_NAME", "")
         smtp_password = os.getenv("SMTP_PASSWORD", "")
         if smtp_username and smtp_password:
@@ -201,10 +175,12 @@ async def on_startup():
                     logger.info("SMTP credentials not set; skipping email send (noop)")
                     return None
             email_client = _NoopEmailClient()
+        
         # User repo/service
         user_repo = UserRepository(postgres_conn.get_session, logger)
         user_service = UserService(user_repo, logger, token_client)
-        # Zep user service (for linking users to Zep) - Don't block startup if this fails
+        
+        # Zep user service
         zep_user_service = None
         zep_api_key = os.getenv("ZEP_API_KEY")
         if zep_api_key:
@@ -213,8 +189,7 @@ async def on_startup():
                 zep_user_service = ZepUserService(logger)
                 logger.info("Zep user service initialized successfully")
                 
-                # Preload context template at startup - but don't block if it fails
-                # This is non-critical and can be retried later
+                # Preload context template at startup
                 try:
                     await asyncio.wait_for(
                         zep_user_service.ensure_context_template(max_retries=1, initial_delay=0.5, force_update=True),
@@ -231,8 +206,9 @@ async def on_startup():
         else:
             logger.info("ZEP_API_KEY not set, skipping Zep integration")
             
-        # Auth service and handler
+        # Auth service
         auth_service = AuthService(user_service, token_client, redis_client, logger, email_client, zep_user_service)
+        
         # Expose on app.state for dependencies
         app.state.logger = logger
         app.state.postgres_conn = postgres_conn
@@ -245,38 +221,78 @@ async def on_startup():
         app.state.auth_service = auth_service
         app.state.session_service = session_service
         app.state.zep_user_service = zep_user_service
+        app.state.startup_complete = True
+        app.state.startup_error = None
         
-        startup_complete = True  # Mark startup as successful
         logger.info("✓ Startup complete - application is ready!")
+        
     except Exception as e:
         logger.error(f"✗ Startup failed: {e}", exc_info=True)
         logger.error("Application will start in degraded mode - check logs above")
-        logger.error("Health endpoint will be available to check status")
         
         # Set minimal app.state so health endpoint works
-        if not hasattr(app.state, "logger"):
-            app.state.logger = logger
-        if not hasattr(app.state, "postgres_conn"):
-            app.state.postgres_conn = None
-        if not hasattr(app.state, "redis_client"):
-            app.state.redis_client = None
-        
-        startup_complete = True  # Mark complete even on error so health works
-        
-        # Don't raise - let app start so we can debug via health endpoint
+        app.state.logger = logger
+        app.state.postgres_conn = None
+        app.state.redis_client = None
+        app.state.startup_complete = False
+        app.state.startup_error = str(e)
     
+    # Application is running
+    yield
+    
+    # Shutdown (cleanup if needed)
+    logger.info("Neo Chat Wrapper shutting down...")
+
+app = FastAPI(
+    title="Neo Chat Wrapper",
+    description="Unified LLM & Chat Orchestration Service",
+    version="1.0.0",
+    lifespan=lifespan
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # adjust in prod
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Convert HTTPException to standardized error format"""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "status": False,
+            "message": exc.detail
+        },
+        headers=exc.headers
+    )
+
+# Routers
+app.include_router(chat_router)
+app.include_router(auth_router)
+app.include_router(user_router)
+
 # Health Check Endpoint
 @app.get("/health")
 async def health():
     """Enhanced health check that shows service status"""
     
-    # Return starting status if startup not complete yet
+    # Check startup status first
+    startup_complete = getattr(app.state, "startup_complete", False)
+    startup_error = getattr(app.state, "startup_error", None)
+    
     if not startup_complete:
-        return {
-            "status": "starting",
-            "service": "neo-chat-wrapper",
-            "message": "Application is still starting up..."
-        }
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "starting" if startup_error is None else "degraded",
+                "service": "neo-chat-wrapper",
+                "message": startup_error or "Application is still starting up...",
+                "startup_complete": False
+            }
+        )
     
     all_healthy = True
     checks = {}
@@ -311,7 +327,8 @@ async def health():
     status = {
         "status": "ok" if all_healthy else "degraded",
         "service": "neo-chat-wrapper",
-        "checks": checks
+        "checks": checks,
+        "startup_complete": True
     }
     
     return status

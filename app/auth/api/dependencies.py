@@ -12,9 +12,27 @@ security = HTTPBearer(auto_error=False)
 
 def get_auth_handler(request: Request) -> AuthHandler:
     """Get auth handler from app state (container removed)."""
+    # Check if startup completed successfully
+    if not getattr(request.app.state, "startup_complete", False):
+        raise HTTPException(
+            status_code=503, 
+            detail="Service is starting up. Please retry in a moment."
+        )
+    
+    # Check for startup errors
+    startup_error = getattr(request.app.state, "startup_error", None)
+    if startup_error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Service initialization failed: {startup_error}"
+        )
+    
     # Build on first use if not present
     if not hasattr(request.app.state, "auth_service"):
-        raise RuntimeError("Auth service not initialized. Ensure main.py startup wires app.state.*")
+        raise HTTPException(
+            status_code=503,
+            detail="Auth service not initialized. Check application logs."
+        )
     if hasattr(request.app.state, "auth_handler"):
         return request.app.state.auth_handler
     logger = getattr(request.app.state, "logger", None)
@@ -25,8 +43,26 @@ def get_auth_handler(request: Request) -> AuthHandler:
 
 def get_auth_service(request: Request) -> AuthService:
     """Get auth service from app state."""
+    # Check if startup completed successfully
+    if not getattr(request.app.state, "startup_complete", False):
+        raise HTTPException(
+            status_code=503,
+            detail="Service is starting up. Please retry in a moment."
+        )
+    
+    # Check for startup errors
+    startup_error = getattr(request.app.state, "startup_error", None)
+    if startup_error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Service initialization failed: {startup_error}"
+        )
+    
     if not hasattr(request.app.state, "auth_service"):
-        raise RuntimeError("Auth service not initialized. Ensure main.py startup wires app.state.*")
+        raise HTTPException(
+            status_code=503,
+            detail="Auth service not initialized. Check application logs."
+        )
     return request.app.state.auth_service
 
 

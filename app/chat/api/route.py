@@ -16,16 +16,61 @@ logger = get_logger("ChatRouter")
 
 def get_session_service(request: Request) -> Optional[ConversationManager]:
     """Dependency to get session service from app.state."""
+    # Check if startup completed successfully
+    if not getattr(request.app.state, "startup_complete", False):
+        raise HTTPException(
+            status_code=503,
+            detail="Service is starting up. Please retry in a moment."
+        )
+    
+    # Check for startup errors
+    startup_error = getattr(request.app.state, "startup_error", None)
+    if startup_error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Service initialization failed: {startup_error}"
+        )
+    
     return getattr(request.app.state, "session_service", None)
 
 
 def get_user_service(request: Request) -> Optional[UserService]:
     """Dependency to get user service from app.state."""
+    # Check if startup completed successfully
+    if not getattr(request.app.state, "startup_complete", False):
+        raise HTTPException(
+            status_code=503,
+            detail="Service is starting up. Please retry in a moment."
+        )
+    
+    # Check for startup errors
+    startup_error = getattr(request.app.state, "startup_error", None)
+    if startup_error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Service initialization failed: {startup_error}"
+        )
+    
     return getattr(request.app.state, "user_service", None)
 
 
 def get_zep_user_service(request: Request) -> Optional[ZepUserService]:
     """Dependency to get Zep user service from app.state."""
+    # Check if startup completed successfully
+    if not getattr(request.app.state, "startup_complete", False):
+        raise HTTPException(
+            status_code=503,
+            detail="Service is starting up. Please retry in a moment."
+        )
+    
+    # Check for startup errors
+    startup_error = getattr(request.app.state, "startup_error", None)
+    if startup_error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Service initialization failed: {startup_error}"
+        )
+    
     return getattr(request.app.state, "zep_user_service", None)
 
 
