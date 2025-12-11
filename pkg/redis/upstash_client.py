@@ -278,3 +278,28 @@ class UpstashRedisClient:
         except Exception as e:
             self.logger.error(f"Error async setting key {key}: {e}")
             return False
+    
+    async def async_delete(self, *keys: str) -> int:
+        """
+        Async delete one or more keys (compatibility method)
+        
+        Args:
+            *keys: One or more keys to delete
+            
+        Returns:
+            Number of keys deleted
+        """
+        try:
+            if not keys:
+                return 0
+            
+            response = await self.async_client.post(
+                self.url,
+                json=["DEL", *keys]
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get("result", 0)
+        except Exception as e:
+            self.logger.error(f"Error async deleting keys {keys}: {e}")
+            return 0
