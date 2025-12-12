@@ -106,6 +106,8 @@ class PostgresConnection:
                     connect_args={
                         "timeout": 15,  # Connection timeout in seconds
                         "command_timeout": 15,  # Command timeout
+                        "statement_cache_size": 0,  # Disable statement cache for serverless
+                        "prepared_statement_cache_size": 0,  # Disable prepared statement cache
                         "server_settings": {
                             "application_name": "neo-chat-wrapper"
                         }
