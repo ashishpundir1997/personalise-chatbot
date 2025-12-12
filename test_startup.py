@@ -129,7 +129,7 @@ async def main():
     passed, failed = await test_startup_sequence()
     
     if failed == 0:
-        print("\n✅ All tests passed! Ready to deploy to Railway 🚀")
+        print("\n✅ All tests passed! Ready to deploy 🚀")
         return 0
     else:
         print(f"\n❌ {failed} test(s) failed. Fix issues before deploying.")

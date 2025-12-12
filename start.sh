@@ -1,5 +1,5 @@
 #!/bin/bash
-# Railway startup script with better logging
+# Startup script with better logging
 
 echo "=================================================="
 echo "Starting Neo Chat Wrapper"

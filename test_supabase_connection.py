@@ -120,7 +120,7 @@ async def main():
             print(f'POSTGRES_PASSWORD={password}')
             print(f'POSTGRES_DB={database}')
             print(f'\nDATABASE_URL=postgresql://postgres.{project_ref}:{password}@{pooler_host}:6543/{database}')
-            print("\nThen update the same in Railway!")
+            print("\nThen update the same in your deployment platform!")
             return
     
     print("\n" + "=" * 70)

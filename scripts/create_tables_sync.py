@@ -2,8 +2,8 @@
 
 Usage (locally):
 
-    # export the DATABASE_URL from Railway or set it inline
-    export DATABASE_URL="<your-railway-database-url>"
+    # export the DATABASE_URL from your cloud platform or set it inline
+    export DATABASE_URL="<your-database-url>"
     python scripts/create_tables_sync.py
 
 Notes:
@@ -55,7 +55,7 @@ def normalize_database_url(url: str) -> str:
 def main():
     database_url = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL")
     if not database_url:
-        print("❌ ERROR: Please set DATABASE_URL environment variable (Railway provides this) and re-run.")
+        print("❌ ERROR: Please set DATABASE_URL environment variable and re-run.")
         print("Example: export DATABASE_URL='postgresql://...'")
         sys.exit(2)
 

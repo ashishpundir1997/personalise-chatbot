@@ -1,7 +1,7 @@
 -- ============================================
--- Railway Postgres Table Creation SQL
+-- Postgres Table Creation SQL
 -- ============================================
--- Copy and paste this into Railway SQL console
+-- Copy and paste this into your Postgres SQL console
 -- ============================================
 
 -- Drop existing tables (in reverse order for foreign keys)
@@ -63,8 +63,8 @@ CREATE TABLE messages (
 -- Create indexes
 CREATE INDEX IF NOT EXISTS ix_conversations_user_id ON conversations (user_id);
 CREATE INDEX IF NOT EXISTS ix_conversations_id ON conversations (id);
-CREATE INDEX IF NOT EXISTS ix_messages_conversation_id ON messages (conversation_id);
 CREATE INDEX IF NOT EXISTS ix_messages_id ON messages (id);
+CREATE INDEX IF NOT EXISTS ix_messages_conversation_id ON messages (conversation_id);
 
 -- ============================================
 -- Verify tables were created

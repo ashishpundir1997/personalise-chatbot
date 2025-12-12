@@ -102,7 +102,7 @@ async def lifespan(app: FastAPI):
     if missing_vars:
         error_msg = f"Missing required environment variables: {', '.join(missing_vars)}"
         logger.error(error_msg)
-        logger.error("Please set these environment variables in your Railway dashboard")
+        logger.error("Please set these environment variables in your deployment platform")
         logger.error("Application will start in degraded mode")
         
         # Set minimal state so health endpoint works
@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
     if not connectivity["network_reachable"]:
         logger.warning(f"⚠️  Connectivity pre-check failed: {connectivity['error']}")
         logger.warning("⚠️  This may be normal - PostgreSQL driver will attempt connection anyway")
-        logger.warning("⚠️  If this is Railway, the driver may have better network access than our pre-check")
+        logger.warning("⚠️  The driver may have better network access than our pre-check")
     else:
         logger.info("✓ Connectivity pre-check passed")
     
@@ -139,7 +139,7 @@ async def lifespan(app: FastAPI):
             username=required_env_vars["POSTGRES_USER"],
             password=required_env_vars["POSTGRES_PASSWORD"],
             database=required_env_vars["POSTGRES_DB"],
-            pool_timeout=30,  # Increase timeout for Railway deployments
+            pool_timeout=30,  # Increase timeout for cloud deployments
         )
         postgres_conn = PostgresConnection(postgres_config, logger)
         chat_repo = ChatRepository(postgres_conn)
@@ -352,17 +352,17 @@ app.include_router(user_router)
 # Health Check Endpoint
 @app.get("/health")
 async def health():
-    """Enhanced health check that shows service status - ALWAYS returns 200 for Railway"""
+    """Enhanced health check that shows service status"""
     
     # Check startup status first
     startup_complete = getattr(app.state, "startup_complete", False)
     startup_error = getattr(app.state, "startup_error", None)
     
-    # ALWAYS return 200 so Railway health checks pass
+    # Return 200 for platform health checks even during startup
     # Include startup status in the response body
     if not startup_complete:
         return JSONResponse(
-            status_code=200,  # Changed from 503 to 200 for Railway healthcheck
+            status_code=200,  # Return 200 for health checks during startup
             content={
                 "status": "starting" if startup_error is None else "degraded",
                 "service": "neo-chat-wrapper",
@@ -421,6 +421,6 @@ async def root():
     }
 
 if __name__ == "__main__":
-    # Use PORT from environment for Railway, fallback to 8080 for local
+    # Use PORT from environment (Render provides this), fallback to 8080 for local
     port = int(os.getenv("PORT", "8080"))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)

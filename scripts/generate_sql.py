@@ -1,6 +1,6 @@
 """Generate SQL CREATE TABLE statements from SQLAlchemy models.
 
-This outputs pure SQL that you can copy/paste into Railway's Postgres SQL console.
+This outputs pure SQL that you can copy/paste into any Postgres SQL console.
 
 Usage:
     python scripts/generate_sql.py > create_tables.sql
@@ -29,9 +29,9 @@ def generate_sql():
     engine = create_engine("postgresql://dummy", strategy='mock', executor=lambda sql, *_: None)
     
     print("-- ============================================")
-    print("-- Railway Postgres Table Creation SQL")
+    print("-- Postgres Table Creation SQL")
     print("-- ============================================")
-    print("-- Copy and paste this into Railway SQL console")
+    print("-- Copy and paste this into your Postgres SQL console")
     print("-- ============================================\n")
     
     print("-- Drop existing tables (in reverse order for foreign keys)")
