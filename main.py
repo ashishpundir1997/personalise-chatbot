@@ -162,20 +162,11 @@ async def lifespan(app: FastAPI):
         from app.chat.repository.sql_schema.conversation import ConversationModel, MessageModel
         from app.user.repository.sql_schema.user import UserModel
         
-        logger.info("Creating database tables if needed...")
-        try:
-            async with engine.begin() as conn:
-                await asyncio.wait_for(
-                    conn.run_sync(Base.metadata.create_all),
-                    timeout=30.0  # 30 second timeout for table creation
-                )
-            logger.info("✓ All database tables ensured.")
-        except asyncio.TimeoutError:
-            logger.error("Database table creation timed out")
-            raise
-        except Exception as e:
-            logger.error(f"✗ Error creating database tables: {e}", exc_info=True)
-            raise
+        logger.info("Skipping automatic table creation (use migrations or create manually)")
+        logger.info("Tables needed: users, conversations, messages")
+        # Note: Automatic table creation disabled due to Supabase connection pooler 
+        # incompatibility with prepared statements.  Tables should already exist in production.
+        # For development, run migrations manually or use direct connection (port 5432)
         
         # Wire auth-related services
         jwt_secret = os.getenv("JWT_SUPER_SECRET", "dev-secret")
