@@ -16,10 +16,15 @@ Notes:
 
 import os
 import sys
-from sqlalchemy import create_engine
+from pathlib import Path
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
-# Adjust the import below if your declarative Base is at a different path
+# Add project root to Python path so we can import pkg and app modules
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
+# Now import the Base and models
 try:
     from pkg.db_util.sql_alchemy.declarative_base import Base
 except Exception as e:
@@ -50,22 +55,68 @@ def normalize_database_url(url: str) -> str:
 def main():
     database_url = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL")
     if not database_url:
-        print("Please set DATABASE_URL environment variable (Railway provides this) and re-run.")
+        print("❌ ERROR: Please set DATABASE_URL environment variable (Railway provides this) and re-run.")
+        print("Example: export DATABASE_URL='postgresql://...'")
         sys.exit(2)
 
     sync_url = normalize_database_url(database_url)
-    print("Using database URL:", sync_url.replace(os.environ.get('POSTGRES_PASSWORD',''), '***') if os.environ.get('POSTGRES_PASSWORD') else sync_url)
+    
+    # Mask password in log output
+    display_url = sync_url
+    if '@' in sync_url:
+        # Format: postgresql://user:pass@host:port/db
+        parts = sync_url.split('@')
+        if ':' in parts[0]:
+            user_pass = parts[0].split('://')[-1]
+            if ':' in user_pass:
+                user = user_pass.split(':')[0]
+                display_url = sync_url.replace(user_pass, f"{user}:***")
+    
+    print(f"🔗 Using database URL: {display_url}")
 
     try:
+        print("\n📦 Creating SQLAlchemy engine...")
         engine = create_engine(sync_url, echo=True)
-        print("Creating tables from metadata...")
+        
+        print("\n🧪 Testing database connection...")
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT version()"))
+            version = result.scalar()
+            print(f"✅ Connected to: {version[:80]}...")
+        
+        print("\n🗑️  Dropping old tables (if any)...")
+        with engine.begin() as conn:
+            # Drop in reverse order to handle foreign keys
+            conn.execute(text("DROP TABLE IF EXISTS messages CASCADE"))
+            conn.execute(text("DROP TABLE IF EXISTS conversations CASCADE"))
+            conn.execute(text("DROP TABLE IF EXISTS users CASCADE"))
+            print("✅ Old tables dropped")
+        
+        print("\n🔨 Creating tables from SQLAlchemy metadata...")
         Base.metadata.create_all(bind=engine)
-        print("Table creation complete.")
+        print("✅ Tables created successfully!")
+        
+        print("\n📊 Verifying tables exist...")
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT table_name 
+                FROM information_schema.tables 
+                WHERE table_schema = 'public'
+                ORDER BY table_name
+            """))
+            tables = [row[0] for row in result]
+            if tables:
+                print(f"✅ Tables in database: {', '.join(tables)}")
+            else:
+                print("⚠️  No tables found in public schema")
+        
+        print("\n🎉 SUCCESS! Database tables are ready.")
+        
     except SQLAlchemyError as e:
-        print("SQLAlchemy error during create_all():", e)
+        print(f"\n❌ SQLAlchemy error: {e}")
         raise
     except Exception as e:
-        print("Unexpected error:", e)
+        print(f"\n❌ Unexpected error: {e}")
         raise
 
 
