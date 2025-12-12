@@ -24,11 +24,62 @@ from dotenv import load_dotenv
 import asyncio
 import os
 import sys
+import socket
+
 # App & Logger Setup
 # Load .env so os.getenv picks up values from your .env file
 load_dotenv()
 
 logger = get_logger("neo-chat-wrapper")
+
+
+async def check_database_connectivity(host: str, port: int, timeout: float = 5.0) -> dict:
+    """Check if database host is reachable via DNS and network."""
+    result = {
+        "dns_resolved": False,
+        "network_reachable": False,
+        "ip_address": None,
+        "error": None
+    }
+    
+    try:
+        # Try DNS resolution
+        logger.info(f"Checking DNS resolution for {host}...")
+        loop = asyncio.get_event_loop()
+        ip_address = await asyncio.wait_for(
+            loop.run_in_executor(None, socket.gethostbyname, host),
+            timeout=timeout
+        )
+        result["dns_resolved"] = True
+        result["ip_address"] = ip_address
+        logger.info(f"✓ DNS resolved: {host} -> {ip_address}")
+        
+        # Try TCP connection
+        logger.info(f"Checking network connectivity to {ip_address}:{port}...")
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(ip_address, port),
+                timeout=timeout
+            )
+            writer.close()
+            await writer.wait_closed()
+            result["network_reachable"] = True
+            logger.info(f"✓ Network connection successful to {ip_address}:{port}")
+        except Exception as e:
+            result["error"] = f"Network connection failed: {e}"
+            logger.error(f"✗ Network connection failed to {ip_address}:{port}: {e}")
+            
+    except socket.gaierror as e:
+        result["error"] = f"DNS resolution failed: {e}"
+        logger.error(f"✗ DNS resolution failed for {host}: {e}")
+    except asyncio.TimeoutError:
+        result["error"] = f"Connection check timed out after {timeout}s"
+        logger.error(f"✗ Connection check timed out for {host}")
+    except Exception as e:
+        result["error"] = f"Unexpected error: {e}"
+        logger.error(f"✗ Unexpected error checking connectivity: {e}")
+    
+    return result
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -81,6 +132,33 @@ async def lifespan(app: FastAPI):
     
     logger.info(f"Connecting to database at: {required_env_vars['POSTGRES_HOST']}")
     
+    # Check database connectivity before attempting connection
+    db_host = required_env_vars["POSTGRES_HOST"]
+    db_port = int(os.getenv("POSTGRES_PORT", "5432"))
+    
+    connectivity = await check_database_connectivity(db_host, db_port, timeout=10.0)
+    if not connectivity["dns_resolved"]:
+        error_msg = f"Cannot resolve database hostname: {db_host}. Error: {connectivity['error']}"
+        logger.error(error_msg)
+        logger.error("Please verify POSTGRES_HOST in Railway environment variables")
+        app.state.logger = logger
+        app.state.postgres_conn = None
+        app.state.redis_client = None
+        app.state.startup_complete = False
+        app.state.startup_error = error_msg
+        yield
+        return
+    
+    if not connectivity["network_reachable"]:
+        error_msg = f"Database host is reachable via DNS ({connectivity['ip_address']}) but network connection failed. Error: {connectivity['error']}"
+        logger.error(error_msg)
+        logger.error("This may indicate:")
+        logger.error("  1. Firewall blocking outbound connections from Railway")
+        logger.error("  2. Supabase security settings blocking Railway IPs")
+        logger.error("  3. Database is down or not accepting connections")
+        logger.error(f"  4. Port {db_port} may be blocked")
+        # Don't return here - still try to connect as SQLAlchemy might have better luck
+    
     try:
         # Initialize Postgres connection with validated environment variables
         postgres_config = PostgresConfig(
@@ -94,16 +172,16 @@ async def lifespan(app: FastAPI):
         postgres_conn = PostgresConnection(postgres_config, logger)
         chat_repo = ChatRepository(postgres_conn)
         
-        # Initialize Postgres engine with timeout protection
-        logger.info("Initializing database engine...")
+        # Initialize Postgres engine with timeout protection and retry logic
+        logger.info("Initializing database engine with retry logic...")
         try:
             engine = await asyncio.wait_for(
-                postgres_conn.get_engine(),
-                timeout=45.0  # 45 second timeout for initial connection
+                postgres_conn.get_engine(max_retries=5, initial_delay=2.0),
+                timeout=60.0  # 60 second timeout for initial connection with retries
             )
             logger.info("✓ Postgres engine initialized and cached during startup.")
         except asyncio.TimeoutError:
-            logger.error("Database connection timed out after 45 seconds")
+            logger.error("Database connection timed out after 60 seconds")
             raise ConnectionError("Database connection timeout - check network/credentials")
         
         # Create all tables automatically if not present

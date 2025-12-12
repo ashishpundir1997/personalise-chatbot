@@ -76,8 +76,8 @@ class PostgresConnection:
             self._db_url = self._generate_db_url()
         return self._db_url
 
-    async def get_engine(self) -> AsyncEngine:
-        """Get or create engine using module-level singleton pattern."""
+    async def get_engine(self, max_retries: int = 3, initial_delay: float = 2.0) -> AsyncEngine:
+        """Get or create engine using module-level singleton pattern with retry logic."""
         if self._db_url is None:
             self._db_url = self.get_db_url()
         
@@ -85,46 +85,70 @@ class PostgresConnection:
         if self._db_url in _engine_cache:
             return _engine_cache[self._db_url]
         
-        # Create new engine and store in module-level cache
+        # Create new engine and store in module-level cache with retry logic
         self.logger.info("Database engine not initialized. Creating new engine...")
         pool_opts = {
             "pool_size": self.db_config.pool_size,
             "max_overflow": self.db_config.max_overflow,
             "pool_timeout": self.db_config.pool_timeout,
             "pool_recycle": self.db_config.pool_recycle,  # Recycle connections e.g., every 30 mins
+            "pool_pre_ping": True,  # Enable connection health checks
         }
         self.logger.info(f"Creating async engine with pool options: {pool_opts}")
-        try:
-            engine = create_async_engine(
-                self._db_url,
-                echo=False,  # Set to True for debugging SQL
-                # echo_pool="debug", # Set to "debug" for verbose pool logging  
-                **pool_opts
-            )
-            
-            # Test the connection immediately
-            async with engine.connect() as conn:
-                self.logger.info("Database connection tested successfully.")
+        
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                engine = create_async_engine(
+                    self._db_url,
+                    echo=False,  # Set to True for debugging SQL
+                    # echo_pool="debug", # Set to "debug" for verbose pool logging
+                    connect_args={
+                        "timeout": 15,  # Connection timeout in seconds
+                        "command_timeout": 15,  # Command timeout
+                        "server_settings": {
+                            "application_name": "neo-chat-wrapper"
+                        }
+                    },
+                    **pool_opts
+                )
+                
+                # Test the connection immediately
+                self.logger.info(f"Testing database connection (attempt {attempt + 1}/{max_retries})...")
+                async with engine.connect() as conn:
+                    self.logger.info("Database connection tested successfully.")
 
-            sessionmaker = async_sessionmaker(
-                bind=engine,
-                class_=AsyncSession,
-                expire_on_commit=False,
-            )
-            
-            # Store in module-level cache (singleton pattern)
-            _engine_cache[self._db_url] = engine
-            _sessionmaker_cache[self._db_url] = sessionmaker
-            self.logger.info("Async engine and sessionmaker created successfully and cached.")
+                sessionmaker = async_sessionmaker(
+                    bind=engine,
+                    class_=AsyncSession,
+                    expire_on_commit=False,
+                )
+                
+                # Store in module-level cache (singleton pattern)
+                _engine_cache[self._db_url] = engine
+                _sessionmaker_cache[self._db_url] = sessionmaker
+                self.logger.info("Async engine and sessionmaker created successfully and cached.")
+                return engine
 
-        except SQLAlchemyError as e:
-            self.logger.error(f"Failed to create SQLAlchemy engine: {e}", exc_info=True)
-            raise ConnectionError(f"Could not create database engine: {e}") from e
-        except Exception as e:
-            self.logger.error(f"An unexpected error occurred during engine creation: {e}", exc_info=True)
-            raise ConnectionError(f"Unexpected error creating engine: {e}") from e
-
-        return engine
+            except (SQLAlchemyError, OSError, ConnectionError) as e:
+                last_error = e
+                delay = initial_delay * (2 ** attempt)  # Exponential backoff
+                
+                if attempt < max_retries - 1:
+                    self.logger.warning(
+                        f"Database connection attempt {attempt + 1}/{max_retries} failed: {e}. "
+                        f"Retrying in {delay:.1f}s..."
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    self.logger.error(f"Failed to create database engine after {max_retries} attempts: {e}", exc_info=True)
+            except Exception as e:
+                last_error = e
+                self.logger.error(f"An unexpected error occurred during engine creation: {e}", exc_info=True)
+                break
+        
+        # If we get here, all retries failed
+        raise ConnectionError(f"Could not create database engine after {max_retries} attempts: {last_error}") from last_error
 
     @asynccontextmanager
     async def get_session(self) -> AsyncGenerator[AsyncSession, None]:
