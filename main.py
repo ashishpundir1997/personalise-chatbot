@@ -33,8 +33,8 @@ load_dotenv()
 logger = get_logger("neo-chat-wrapper")
 
 
-async def check_database_connectivity(host: str, port: int, timeout: float = 5.0) -> dict:
-    """Check if database host is reachable via DNS and network."""
+async def check_database_connectivity(host: str, port: int, timeout: float = 10.0) -> dict:
+    """Check if database host is reachable - non-blocking diagnostic only."""
     result = {
         "dns_resolved": False,
         "network_reachable": False,
@@ -43,41 +43,26 @@ async def check_database_connectivity(host: str, port: int, timeout: float = 5.0
     }
     
     try:
-        # Try DNS resolution
-        logger.info(f"Checking DNS resolution for {host}...")
-        loop = asyncio.get_event_loop()
-        ip_address = await asyncio.wait_for(
-            loop.run_in_executor(None, socket.gethostbyname, host),
-            timeout=timeout
-        )
-        result["dns_resolved"] = True
-        result["ip_address"] = ip_address
-        logger.info(f"✓ DNS resolved: {host} -> {ip_address}")
-        
-        # Try TCP connection
-        logger.info(f"Checking network connectivity to {ip_address}:{port}...")
+        # Try direct TCP connection (let asyncpg handle DNS internally)
+        logger.info(f"Testing network connectivity to {host}:{port}...")
         try:
             _, writer = await asyncio.wait_for(
-                asyncio.open_connection(ip_address, port),
+                asyncio.open_connection(host, port),
                 timeout=timeout
             )
             writer.close()
             await writer.wait_closed()
             result["network_reachable"] = True
-            logger.info(f"✓ Network connection successful to {ip_address}:{port}")
+            result["dns_resolved"] = True
+            logger.info(f"✓ Network connection successful to {host}:{port}")
         except Exception as e:
-            result["error"] = f"Network connection failed: {e}"
-            logger.error(f"✗ Network connection failed to {ip_address}:{port}: {e}")
+            result["error"] = f"Connection test failed: {e}"
+            logger.warning(f"⚠️  Connection pre-check failed to {host}:{port}: {e}")
+            logger.warning(f"⚠️  This may be normal - PostgreSQL will attempt connection anyway")
             
-    except socket.gaierror as e:
-        result["error"] = f"DNS resolution failed: {e}"
-        logger.error(f"✗ DNS resolution failed for {host}: {e}")
-    except asyncio.TimeoutError:
-        result["error"] = f"Connection check timed out after {timeout}s"
-        logger.error(f"✗ Connection check timed out for {host}")
     except Exception as e:
         result["error"] = f"Unexpected error: {e}"
-        logger.error(f"✗ Unexpected error checking connectivity: {e}")
+        logger.warning(f"⚠️  Connectivity check error: {e}")
     
     return result
 
@@ -132,32 +117,19 @@ async def lifespan(app: FastAPI):
     
     logger.info(f"Connecting to database at: {required_env_vars['POSTGRES_HOST']}")
     
-    # Check database connectivity before attempting connection
+    # Check database connectivity before attempting connection (diagnostic only)
     db_host = required_env_vars["POSTGRES_HOST"]
     db_port = int(os.getenv("POSTGRES_PORT", "5432"))
     
+    logger.info("Running connectivity pre-check (diagnostic only)...")
     connectivity = await check_database_connectivity(db_host, db_port, timeout=10.0)
-    if not connectivity["dns_resolved"]:
-        error_msg = f"Cannot resolve database hostname: {db_host}. Error: {connectivity['error']}"
-        logger.error(error_msg)
-        logger.error("Please verify POSTGRES_HOST in Railway environment variables")
-        app.state.logger = logger
-        app.state.postgres_conn = None
-        app.state.redis_client = None
-        app.state.startup_complete = False
-        app.state.startup_error = error_msg
-        yield
-        return
     
     if not connectivity["network_reachable"]:
-        error_msg = f"Database host is reachable via DNS ({connectivity['ip_address']}) but network connection failed. Error: {connectivity['error']}"
-        logger.error(error_msg)
-        logger.error("This may indicate:")
-        logger.error("  1. Firewall blocking outbound connections from Railway")
-        logger.error("  2. Supabase security settings blocking Railway IPs")
-        logger.error("  3. Database is down or not accepting connections")
-        logger.error(f"  4. Port {db_port} may be blocked")
-        # Don't return here - still try to connect as SQLAlchemy might have better luck
+        logger.warning(f"⚠️  Connectivity pre-check failed: {connectivity['error']}")
+        logger.warning("⚠️  This may be normal - PostgreSQL driver will attempt connection anyway")
+        logger.warning("⚠️  If this is Railway, the driver may have better network access than our pre-check")
+    else:
+        logger.info("✓ Connectivity pre-check passed")
     
     try:
         # Initialize Postgres connection with validated environment variables
