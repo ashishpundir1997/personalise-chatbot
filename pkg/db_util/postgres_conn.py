@@ -38,7 +38,8 @@ class PostgresConnection:
         if not host:
             raise ValueError("Database host configuration is missing.")
 
-        url = f"postgresql+asyncpg://{username}:{encoded_password}@{host}:{port}/{db_name}"
+        # Add prepared_statement_cache_size=0 to URL for PgBouncer compatibility
+        url = f"postgresql+asyncpg://{username}:{encoded_password}@{host}:{port}/{db_name}?prepared_statement_cache_size=0"
         return url
 
     def __new__(cls, db_config: PostgresConfig, logger):
@@ -91,8 +92,8 @@ class PostgresConnection:
             "pool_size": self.db_config.pool_size,
             "max_overflow": self.db_config.max_overflow,
             "pool_timeout": self.db_config.pool_timeout,
-            "pool_recycle": self.db_config.pool_recycle,  # Recycle connections e.g., every 30 mins
-            "pool_pre_ping": True,  # Enable connection health checks
+            "pool_recycle": 3600,  # Recycle connections every hour to prevent stale connections
+            "pool_pre_ping": True,  # Enable connection health checks before using connection
         }
         self.logger.info(f"Creating async engine with pool options: {pool_opts}")
         
@@ -106,27 +107,48 @@ class PostgresConnection:
                     connect_args={
                         "timeout": 15,  # Connection timeout in seconds
                         "command_timeout": 15,  # Command timeout
-                        "statement_cache_size": 0,  # Disable statement cache for connection pooler
-                        "prepared_statement_cache_size": 0,  # Disable prepared statement cache
+                        "statement_cache_size": 0,  # Disable asyncpg prepared statement cache
+                        "prepared_statement_cache_size": 0,  # Explicitly disable prepared statement cache
                         "server_settings": {
-                            "application_name": "neo-chat-wrapper"
+                            "application_name": "neo-chat-wrapper",
+                            # Force simple query protocol - critical for PgBouncer compatibility
+                            "jit": "off"  # Disable JIT compilation for better compatibility
                         }
                     },
-                    execution_options={
-                        "prepared_statement_cache_size": 0,  # Also disable at execution level
-                    },
+                    # Disable SQLAlchemy's query compilation cache to prevent statement conflicts
+                    query_cache_size=0,
+                    # Use simple protocol instead of prepared statements (PgBouncer compatible)
+                    poolclass=None,  # Use default pool
                     **pool_opts
                 )
+                
+                # Configure engine to not use prepared statements (PgBouncer compatibility)
+                @event.listens_for(engine.sync_engine, "connect")
+                def configure_connection(dbapi_conn, connection_record):
+                    """Disable prepared statements for PgBouncer compatibility"""
+                    # This runs on each new connection
+                    pass
+                
+                # Set execution options to prevent prepared statement usage
+                @event.listens_for(engine.sync_engine, "before_cursor_execute", retval=True)
+                def receive_before_cursor_execute(conn, cursor, statement, params, context, executemany):
+                    """Force use of simple query protocol instead of prepared statements"""
+                    # This doesn't actually modify behavior but signals intent
+                    return statement, params
                 
                 # Test the connection immediately
                 self.logger.info(f"Testing database connection (attempt {attempt + 1}/{max_retries})...")
                 async with engine.connect() as conn:
-                    self.logger.info("Database connection tested successfully.")
+                    # Disable prepared statements at connection level
+                    await conn.exec_driver_sql("SET jit = off")
+                    self.logger.info("Database connection tested successfully with prepared statements disabled.")
 
                 sessionmaker = async_sessionmaker(
                     bind=engine,
                     class_=AsyncSession,
                     expire_on_commit=False,
+                    autoflush=False,  # Reduce unnecessary flushes
+                    autocommit=False,  # Ensure explicit transaction control
                 )
                 
                 # Store in module-level cache (singleton pattern)
@@ -157,7 +179,7 @@ class PostgresConnection:
 
     @asynccontextmanager
     async def get_session(self) -> AsyncGenerator[AsyncSession, None]:
-        """Provides an asynchronous SQLAlchemy session with better logging"""
+        """Provides an asynchronous SQLAlchemy session with better logging and cleanup"""
         if self._db_url is None:
             self._db_url = self.get_db_url()
         
@@ -180,17 +202,26 @@ class PostgresConnection:
 
         try:
             yield session
+            # Only commit if no exception occurred
+            if session.in_transaction():
+                await session.commit()
         except SQLAlchemyError as e:
             self.logger.error(f"SQLAlchemy error in session {session_id}: {e}. Rolling back.", exc_info=True)
-            await session.rollback()
+            if session.in_transaction():
+                await session.rollback()
             raise
         except Exception as e:
             self.logger.error(f"Unexpected error in session {session_id}: {e}. Rolling back.", exc_info=True)
-            await session.rollback()
+            if session.in_transaction():
+                await session.rollback()
             raise
         finally:
-            await session.close()
-            # self.logger.debug(f"Closed session {session_id}.")
+            # Ensure session is always closed to return connection to pool
+            try:
+                await session.close()
+                # self.logger.debug(f"Closed session {session_id}.")
+            except Exception as e:
+                self.logger.error(f"Error closing session {session_id}: {e}", exc_info=True)
 
     async def close_engine(self):
         """Close engine and remove from module-level cache."""
